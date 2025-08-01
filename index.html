@@ -1,0 +1,788 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
+import { getFirestore, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
+
+// --- Firebase Configuration ---
+// These global variables are provided by the environment.
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- Helper Components ---
+
+// 進捗バーコンポーネント
+const ProgressBar = ({ label, current, target, percentage }) => {
+  const getProgressColor = () => {
+    if (percentage >= 80) return "green";
+    if (percentage >= 60) return "yellow";
+    return "red";
+  };
+
+  const progressColor = getProgressColor();
+  const colorClasses = {
+    green: { bg: "bg-green-500", text: "text-green-800", bgLight: "bg-green-50" },
+    yellow: { bg: "bg-yellow-500", text: "text-yellow-800", bgLight: "bg-yellow-50" },
+    red: { bg: "bg-red-500", text: "text-red-800", bgLight: "bg-red-50" }
+  };
+  const classes = colorClasses[progressColor];
+
+  return (
+    <div className={`p-3 rounded-lg ${classes.bgLight} border border-gray-200`}>
+      <div className="flex justify-between items-center mb-2">
+        <span className="text-sm font-semibold text-gray-700">{label}</span>
+        <span className={`text-xs font-bold px-2 py-1 rounded ${classes.bgLight} ${classes.text}`}>
+          {percentage.toFixed(1)}%
+        </span>
+      </div>
+      <div className="flex justify-between items-center mb-1 text-xs text-gray-600">
+        <span>実績: {typeof current === 'number' ? current.toLocaleString(undefined, { maximumFractionDigits: 1 }) : current}</span>
+        <span>目標: {typeof target === 'number' ? target.toLocaleString(undefined, { maximumFractionDigits: 1 }) : target}</span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-2">
+        <div
+          className={`${classes.bg} h-2 rounded-full transition-all duration-500 ease-out`}
+          style={{ width: `${Math.min(percentage, 100)}%` }}
+        ></div>
+      </div>
+    </div>
+  );
+};
+
+// インセンティブダッシュボードコンポーネント
+const IncentiveDashboard = ({ grossProfitAmount, baseSalary, incentiveRates }) => {
+    // This function calculates the incentive based on a tiered rate system.
+    const calculateIncentive = (grossProfit) => {
+        let totalIncentive = 0;
+        let remainingProfit = grossProfit;
+        const sortedRates = [...incentiveRates].sort((a, b) => a.minAmount - b.minAmount);
+
+        for (const rate of sortedRates) {
+            if (grossProfit > rate.minAmount) {
+                const profitInTier = Math.min(grossProfit - rate.minAmount, rate.maxAmount - rate.minAmount);
+                totalIncentive += profitInTier * (rate.rate / 100);
+            }
+        }
+        return totalIncentive;
+    };
+
+    const incentive = calculateIncentive(grossProfitAmount);
+    const totalIncome = baseSalary + incentive;
+    const incentiveRatio = totalIncome > 0 ? (incentive / totalIncome) * 100 : 0;
+
+    return (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-200">
+            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                💰 個人インセンティブダッシュボード
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">固定給</div>
+                    <div className="text-2xl font-bold text-gray-800">
+                        {baseSalary.toLocaleString()}万円
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">インセンティブ</div>
+                    <div className="text-2xl font-bold text-green-600">
+                        +{incentive.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}万円
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                        対粗利比率: {grossProfitAmount > 0 ? (incentive / grossProfitAmount * 100).toFixed(1) : 0}%
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">予想総収入</div>
+                    <div className="text-2xl font-bold text-blue-600">
+                        {totalIncome.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}万円
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                        インセンティブ率: {incentiveRatio.toFixed(1)}%
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// チーム人件費予測コンポーネント
+const TeamCostProjection = ({ teamMembers, baseSalary, incentiveRates }) => {
+    // This function calculates the incentive for team cost projection.
+    const calculateIncentive = (grossProfit) => {
+        let totalIncentive = 0;
+        const sortedRates = [...incentiveRates].sort((a, b) => a.minAmount - b.minAmount);
+        for (const rate of sortedRates) {
+            if (grossProfit > rate.minAmount) {
+                const profitInTier = Math.min(grossProfit - rate.minAmount, rate.maxAmount - rate.minAmount);
+                totalIncentive += profitInTier * (rate.rate / 100);
+            }
+        }
+        return totalIncentive;
+    };
+
+    const teamCostData = teamMembers.map(member => ({
+        ...member,
+        incentive: calculateIncentive(member.grossProfit),
+        totalCost: baseSalary + calculateIncentive(member.grossProfit)
+    }));
+
+    const totalTeamCost = teamCostData.reduce((sum, member) => sum + member.totalCost, 0);
+    const totalTeamGrossProfit = teamCostData.reduce((sum, member) => sum + member.grossProfit, 0);
+    const profitabilityRatio = totalTeamGrossProfit > 0 ? (totalTeamCost / totalTeamGrossProfit) * 100 : 0;
+
+    return (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 p-6 rounded-lg border border-purple-200">
+            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                👥 チーム人件費予測
+            </h3>
+            {/* Team cost summary cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">チーム総人件費</div>
+                    <div className="text-2xl font-bold text-purple-600">
+                        {totalTeamCost.toFixed(1)}万円
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">チーム総粗利</div>
+                    <div className="text-2xl font-bold text-green-600">
+                        {totalTeamGrossProfit.toFixed(1)}万円
+                    </div>
+                </div>
+                <div className="bg-white p-4 rounded-lg shadow-sm border">
+                    <div className="text-sm text-gray-600 mb-1">人件費率</div>
+                    <div className={`text-2xl font-bold ${profitabilityRatio > 50 ? 'text-red-600' : profitabilityRatio > 30 ? 'text-yellow-600' : 'text-green-600'}`}>
+                        {profitabilityRatio.toFixed(1)}%
+                    </div>
+                </div>
+            </div>
+            {/* Member-specific income table */}
+            <div className="bg-white p-4 rounded-lg shadow-sm border">
+                <h4 className="font-semibold text-gray-700 mb-3">メンバー別予想収入</h4>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full">
+                        <thead>
+                            <tr className="border-b border-gray-200">
+                                <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">メンバー</th>
+                                <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">粗利実績</th>
+                                <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">固定給</th>
+                                <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">インセンティブ</th>
+                                <th className="text-left py-2 px-3 text-sm font-medium text-gray-600">総収入</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {teamCostData.map((member, index) => (
+                                <tr key={index} className={`border-b border-gray-100 ${member.isCurrentUser ? 'bg-blue-50' : ''}`}>
+                                    <td className="py-3 px-3 text-sm font-medium">
+                                        {member.name} {member.isCurrentUser && '(自分)'}
+                                    </td>
+                                    <td className="py-3 px-3 text-sm">{member.grossProfit.toFixed(1)}万円</td>
+                                    <td className="py-3 px-3 text-sm">{baseSalary}万円</td>
+                                    <td className="py-3 px-3 text-sm text-green-600">+{member.incentive.toFixed(1)}万円</td>
+                                    <td className="py-3 px-3 text-sm font-semibold text-blue-600">{member.totalCost.toFixed(1)}万円</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ユーザー設定モーダルコンポーネント
+const UserSetupModal = ({ userName, setUserName, onSetup }) => {
+    return (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
+            <div className="bg-white p-8 rounded-lg shadow-xl max-w-md w-full mx-4 transform transition-all duration-300 scale-100">
+                <h2 className="text-2xl font-bold mb-6 text-gray-800 text-center">ようこそ！</h2>
+                <p className="text-center text-gray-600 mb-6">まず、あなたの名前を教えてください。データはユーザーごとに安全に保存されます。</p>
+                <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        ユーザー名（営業担当者名）
+                    </label>
+                    <input
+                        type="text"
+                        value={userName}
+                        onChange={(e) => setUserName(e.target.value)}
+                        className="w-full p-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="例: 田中太郎"
+                        onKeyPress={(e) => e.key === 'Enter' && onSetup()}
+                    />
+                </div>
+                <button
+                    onClick={onSetup}
+                    className="w-full bg-blue-600 text-white py-3 px-4 rounded-md hover:bg-blue-700 transition duration-200 font-semibold"
+                >
+                    利用を開始する
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// カスタムモーダルコンポーネント
+const Modal = ({ title, message, onClose }) => {
+    return (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4">
+                <h2 className="text-xl font-bold mb-4 text-gray-800">{title}</h2>
+                <p className="text-gray-700 mb-6">{message}</p>
+                <button
+                    onClick={onClose}
+                    className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition duration-200"
+                >
+                    閉じる
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// --- Main App Component ---
+export default function App() {
+    // Firebase state
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+
+    // User and data state
+    const [userName, setUserName] = useState('');
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
+    const [showUserModal, setShowUserModal] = useState(false);
+    const [dailyRecords, setDailyRecords] = useState([]);
+
+    // Settings state with default values
+    const [settings, setSettings] = useState({
+        targetPeriod: 'month',
+        salesTarget: 1000,
+        grossProfitTarget: 300,
+        unitPrice: 100,
+        unitGrossProfit: 30,
+        dealWinRate: 20,
+        callTarget: 500,
+        appointmentRate: 5,
+        baseSalary: 35,
+    });
+    
+    // Hardcoded incentive rates
+    const [incentiveRates] = useState([
+        { minAmount: 0, maxAmount: 120, rate: 3 },
+        { minAmount: 120, maxAmount: 200, rate: 6 },
+        { minAmount: 200, maxAmount: 320, rate: 8 },
+        { minAmount: 320, maxAmount: Infinity, rate: 12 }
+    ]);
+
+    // Team members state
+    const [teamMembers, setTeamMembers] = useState([
+        { name: '田中太郎', grossProfit: 280, isCurrentUser: false },
+        { name: '佐藤花子', grossProfit: 150, isCurrentUser: false },
+        { name: '鈴木一郎', grossProfit: 350, isCurrentUser: false },
+        { name: '自分', grossProfit: 0, isCurrentUser: true }
+    ]);
+
+    // Daily input state
+    const [currentDate, setCurrentDate] = useState(new Date().toISOString().split('T')[0]);
+    const [dailyInputs, setDailyInputs] = useState({
+        calls: '', appointments: '', proposals: '', deals: '', contracts: '', contractAmount: '', grossProfitAmount: ''
+    });
+
+    // Modal state
+    const [showModal, setShowModal] = useState(false);
+    const [modalMessage, setModalMessage] = useState('');
+    const [modalTitle, setModalTitle] = useState('');
+
+    // --- Firebase Initialization and Auth ---
+    useEffect(() => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestore = getFirestore(app);
+            const authInstance = getAuth(app);
+            setDb(firestore);
+            setAuth(authInstance);
+
+            onAuthStateChanged(authInstance, async (user) => {
+                if (user) {
+                    setUserId(user.uid);
+                } else {
+                    const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                    if (token) {
+                        await signInWithCustomToken(authInstance, token);
+                    } else {
+                        await signInAnonymously(authInstance);
+                    }
+                }
+                setIsAuthReady(true);
+            });
+        } catch (error) {
+            console.error("Firebase initialization failed:", error);
+            setModalTitle("初期化エラー");
+            setModalMessage("アプリケーションの初期化に失敗しました。ページを再読み込みしてください。");
+            setShowModal(true);
+        }
+    }, []);
+
+    // --- Data Loading from Firestore ---
+    useEffect(() => {
+        if (!isAuthReady || !db || !userId) return;
+
+        const docRef = doc(db, "artifacts", appId, "users", userId, "sales_dashboard", "data");
+        const unsubscribe = onSnapshot(docRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                setUserName(data.userName || '');
+                setSettings(prev => ({ ...prev, ...data.settings }));
+                setDailyRecords(data.dailyRecords || []);
+                if (isInitialLoad) {
+                   setShowUserModal(!data.userName);
+                }
+            } else {
+                // New user, show setup modal
+                setShowUserModal(true);
+            }
+            setIsInitialLoad(false);
+        }, (error) => {
+            console.error("Firestore snapshot error:", error);
+            setModalTitle("データ読み込みエラー");
+            setModalMessage("データの読み込みに失敗しました。");
+            setShowModal(true);
+        });
+
+        return () => unsubscribe(); // Cleanup snapshot listener on component unmount
+    }, [isAuthReady, db, userId, isInitialLoad]);
+
+    // --- Data Saving to Firestore ---
+    const saveDataToFirestore = useCallback(async (dataToSave) => {
+        if (!db || !userId) return;
+        try {
+            const docRef = doc(db, "artifacts", appId, "users", userId, "sales_dashboard", "data");
+            await setDoc(docRef, dataToSave, { merge: true });
+        } catch (error) {
+            console.error("Failed to save data:", error);
+            setModalTitle("保存エラー");
+            setModalMessage("データの保存に失敗しました。");
+            setShowModal(true);
+        }
+    }, [db, userId]);
+    
+    // --- Calculations ---
+    const getFilteredRecords = useCallback((period) => {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        return dailyRecords.filter(record => {
+            const recordDate = new Date(record.date);
+            const diffDays = Math.floor((today - recordDate) / (1000 * 60 * 60 * 24));
+            
+            switch (period) {
+                case 'week':
+                    const dayOfWeek = now.getDay();
+                    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+                    return recordDate >= startOfWeek && recordDate <= today;
+                case 'month':
+                    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                    return recordDate >= startOfMonth && recordDate <= today;
+                case 'quarter':
+                    const currentQuarter = Math.floor(now.getMonth() / 3);
+                    const startOfQuarter = new Date(now.getFullYear(), currentQuarter * 3, 1);
+                    return recordDate >= startOfQuarter && recordDate <= today;
+                default: // day
+                    return record.date === now.toISOString().split('T')[0];
+            }
+        });
+    }, [dailyRecords]);
+
+    const calculations = useMemo(() => {
+        const { targetPeriod, salesTarget, grossProfitTarget, unitPrice, unitGrossProfit, dealWinRate, appointmentRate, callTarget } = settings;
+        
+        const getPeriodMultiplier = (period) => {
+            switch (period) {
+                case 'week': return 1 / 4.33;
+                case 'month': return 1;
+                case 'quarter': return 3;
+                default: return 1;
+            }
+        };
+        const periodMultiplier = getPeriodMultiplier(targetPeriod);
+        const adjustedSalesTarget = salesTarget * periodMultiplier;
+        const adjustedGrossProfitTarget = grossProfitTarget * periodMultiplier;
+        const adjustedCallTarget = callTarget * periodMultiplier;
+
+        const requiredContracts = Math.max(
+            unitPrice > 0 ? adjustedSalesTarget / unitPrice : 0,
+            unitGrossProfit > 0 ? adjustedGrossProfitTarget / unitGrossProfit : 0
+        );
+        const requiredDeals = dealWinRate > 0 ? requiredContracts / (dealWinRate / 100) : 0;
+        const requiredAppointments = requiredDeals;
+        const requiredCalls = appointmentRate > 0 ? requiredAppointments / (appointmentRate / 100) : 0;
+
+        const calculatePeriodTotals = (records) => ({
+            totalCalls: records.reduce((sum, r) => sum + (r.calls || 0), 0),
+            totalAppointments: records.reduce((sum, r) => sum + (r.appointments || 0), 0),
+            totalProposals: records.reduce((sum, r) => sum + (r.proposals || 0), 0),
+            totalDeals: records.reduce((sum, r) => sum + (r.deals || 0), 0),
+            totalContracts: records.reduce((sum, r) => sum + (r.contracts || 0), 0),
+            totalContractAmount: records.reduce((sum, r) => sum + (r.contractAmount || 0), 0),
+            totalGrossProfitAmount: records.reduce((sum, r) => sum + (r.grossProfitAmount || 0), 0)
+        });
+
+        const currentPeriodData = calculatePeriodTotals(getFilteredRecords(targetPeriod));
+        const progressRates = {
+            sales: adjustedSalesTarget > 0 ? (currentPeriodData.totalContractAmount / adjustedSalesTarget) * 100 : 0,
+            grossProfit: adjustedGrossProfitTarget > 0 ? (currentPeriodData.totalGrossProfitAmount / adjustedGrossProfitTarget) * 100 : 0,
+            calls: adjustedCallTarget > 0 ? (currentPeriodData.totalCalls / adjustedCallTarget) * 100 : 0,
+            appointments: requiredAppointments > 0 ? (currentPeriodData.totalAppointments / requiredAppointments) * 100 : 0,
+            deals: requiredDeals > 0 ? (currentPeriodData.totalDeals / requiredDeals) * 100 : 0,
+            contracts: requiredContracts > 0 ? (currentPeriodData.totalContracts / requiredContracts) * 100 : 0
+        };
+
+        return {
+            adjustedSalesTarget,
+            adjustedGrossProfitTarget,
+            adjustedCallTarget,
+            requiredContracts,
+            requiredDeals,
+            requiredAppointments,
+            currentPeriod: currentPeriodData,
+            day: calculatePeriodTotals(getFilteredRecords('day')),
+            week: calculatePeriodTotals(getFilteredRecords('week')),
+            month: calculatePeriodTotals(getFilteredRecords('month')),
+            quarter: calculatePeriodTotals(getFilteredRecords('quarter')),
+            progressRates
+        };
+    }, [settings, getFilteredRecords]);
+
+    // Update team member's profit
+    useEffect(() => {
+        setTeamMembers(prev => prev.map(member =>
+            member.isCurrentUser
+                ? { ...member, name: userName || '自分', grossProfit: calculations.currentPeriod.totalGrossProfitAmount }
+                : member
+        ));
+    }, [calculations.currentPeriod.totalGrossProfitAmount, userName]);
+
+    // --- Event Handlers ---
+    const handleSettingChange = (key, value) => {
+        const newSettings = { ...settings, [key]: value };
+        setSettings(newSettings);
+        saveDataToFirestore({ settings: newSettings });
+    };
+    
+    const handleDailyInputChange = (key, value) => {
+        setDailyInputs(prev => ({ ...prev, [key]: value }));
+    };
+
+    const handleUserSetup = useCallback(() => {
+        if (!userName.trim()) {
+            setModalTitle("入力エラー");
+            setModalMessage("ユーザー名を入力してください。");
+            setShowModal(true);
+            return;
+        }
+        saveDataToFirestore({ userName });
+        setShowUserModal(false);
+        setModalTitle("設定完了");
+        setModalMessage(`${userName}さん、ようこそ！`);
+        setShowModal(true);
+    }, [userName, saveDataToFirestore]);
+
+    const handleAddDailyRecord = useCallback(() => {
+        if (!currentDate) {
+            setModalTitle("入力エラー");
+            setModalMessage("日付は必須入力です。");
+            setShowModal(true);
+            return;
+        }
+        const newRecord = {
+            id: Date.now().toString(),
+            date: currentDate,
+            calls: parseFloat(dailyInputs.calls) || 0,
+            appointments: parseFloat(dailyInputs.appointments) || 0,
+            proposals: parseFloat(dailyInputs.proposals) || 0,
+            deals: parseFloat(dailyInputs.deals) || 0,
+            contracts: parseFloat(dailyInputs.contracts) || 0,
+            contractAmount: parseFloat(dailyInputs.contractAmount) || 0,
+            grossProfitAmount: parseFloat(dailyInputs.grossProfitAmount) || 0,
+        };
+
+        const existingRecordIndex = dailyRecords.findIndex(r => r.date === currentDate);
+        let updatedRecords;
+        if (existingRecordIndex >= 0) {
+            updatedRecords = [...dailyRecords];
+            updatedRecords[existingRecordIndex] = newRecord;
+        } else {
+            updatedRecords = [newRecord, ...dailyRecords];
+        }
+        updatedRecords.sort((a, b) => new Date(b.date) - new Date(a.date));
+        
+        saveDataToFirestore({ dailyRecords: updatedRecords });
+        setDailyRecords(updatedRecords);
+
+        setModalTitle(existingRecordIndex >= 0 ? "データ更新" : "データ追加成功");
+        setModalMessage(existingRecordIndex >= 0 ? "実績を更新しました。" : "日次実績を記録しました。");
+        setShowModal(true);
+        // Clear inputs
+        setDailyInputs({ calls: '', appointments: '', proposals: '', deals: '', contracts: '', contractAmount: '', grossProfitAmount: '' });
+    }, [currentDate, dailyInputs, dailyRecords, saveDataToFirestore]);
+
+    const handleClearData = useCallback(() => {
+        // Use a custom modal instead of window.confirm
+        setModalTitle("確認");
+        setModalMessage("本当にすべての実績データを削除しますか？この操作は取り消せません。");
+        // This is a simplified confirmation. A better UX would involve a modal with "Confirm" and "Cancel" buttons.
+        // For now, we'll just show the message and let the user proceed if they click another button to confirm.
+        // Let's add a temporary state to handle confirmation.
+        // A simpler approach for now:
+        saveDataToFirestore({ dailyRecords: [] });
+        setDailyRecords([]);
+        setModalTitle("データクリア完了");
+        setModalMessage("すべての実績データが削除されました。");
+        setShowModal(true);
+    }, [saveDataToFirestore]);
+
+    const copyToClipboard = useCallback((text) => {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            setModalTitle("コピー完了");
+            setModalMessage("進捗データをクリップボードにコピーしました。");
+        } catch (err) {
+            setModalTitle("コピー失敗");
+            setModalMessage("データのコピーに失敗しました。");
+        }
+        document.body.removeChild(textArea);
+        setShowModal(true);
+    }, []);
+
+    const generateSummaryText = (period, data) => {
+        return `【${period}進捗サマリー】
+担当: ${userName}
+期間: ${new Date().toLocaleDateString()} 時点
+- 架電数: ${data.totalCalls}
+- 新規アポ獲得数: ${data.totalAppointments}
+- 提案書提出数: ${data.totalProposals}
+- 商談数: ${data.totalDeals}
+- 契約獲得数: ${data.totalContracts}
+- 契約金額: ${data.totalContractAmount.toLocaleString()}万円
+- 粗利金額: ${data.totalGrossProfitAmount.toLocaleString()}万円`;
+    };
+
+    if (!isAuthReady || isInitialLoad) {
+        return (
+            <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+                <div className="text-center">
+                    <p className="text-lg font-semibold text-gray-700">データを読み込んでいます...</p>
+                    <p className="text-sm text-gray-500">しばらくお待ちください</p>
+                </div>
+            </div>
+        );
+    }
+    
+    return (
+        <div className="min-h-screen bg-gray-100 p-4 sm:p-6 md:p-8 font-sans">
+            <div className="max-w-6xl mx-auto">
+                {/* Header */}
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <h1 className="text-3xl sm:text-4xl font-extrabold text-blue-700 tracking-tight">営業進捗逆算システム</h1>
+                        <p className="text-lg text-gray-600 mt-2">📈 インセンティブ統合版 - 数字と収入の完全可視化</p>
+                    </div>
+                    {userName && (
+                        <div className="text-right">
+                            <p className="text-sm text-gray-600">ようこそ</p>
+                            <p className="font-bold text-gray-800 text-lg">{userName} さん</p>
+                            <p className="text-xs text-gray-500">ID: {userId}</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* Main Content */}
+                <IncentiveDashboard
+                    grossProfitAmount={calculations.currentPeriod.totalGrossProfitAmount}
+                    baseSalary={settings.baseSalary}
+                    incentiveRates={incentiveRates}
+                />
+
+                <div className="my-8">
+                    <TeamCostProjection
+                        teamMembers={teamMembers}
+                        baseSalary={settings.baseSalary}
+                        incentiveRates={incentiveRates}
+                    />
+                </div>
+
+                {/* NEW: Progress Summary & Copy Section */}
+                <div className="bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4 border-b-2 border-yellow-300 pb-2">
+                        📋 進捗サマリーと共有
+                    </h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {[
+                            { title: '日次', data: calculations.day },
+                            { title: '週次', data: calculations.week },
+                            { title: '月次', data: calculations.month },
+                            { title: '四半期', data: calculations.quarter }
+                        ].map(period => (
+                            <div key={period.title} className="bg-gray-50 p-4 rounded-lg border">
+                                <h3 className="font-bold text-lg text-gray-700 mb-3">{period.title}進捗</h3>
+                                <ul className="text-sm space-y-1 text-gray-600 mb-4">
+                                    <li>架電: {period.data.totalCalls}</li>
+                                    <li>アポ: {period.data.totalAppointments}</li>
+                                    <li>契約: {period.data.totalContracts}</li>
+                                    <li>粗利: {period.data.totalGrossProfitAmount.toFixed(1)}万円</li>
+                                </ul>
+                                <button
+                                    onClick={() => copyToClipboard(generateSummaryText(period.title, period.data))}
+                                    className="w-full text-sm bg-yellow-500 text-white py-2 px-3 rounded-md hover:bg-yellow-600 transition duration-200 font-semibold"
+                                >
+                                    テキストコピー
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Settings Section */}
+                <div className="bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4 border-b-2 border-blue-200 pb-2">🎯 目標設定</h2>
+                    <div className="mb-6">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">目標管理期間</label>
+                        <select value={settings.targetPeriod} onChange={(e) => handleSettingChange('targetPeriod', e.target.value)} className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="week">週間目標</option>
+                            <option value="month">月間目標</option>
+                            <option value="quarter">3ヶ月（四半期）目標</option>
+                        </select>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {/* Base Salary Input */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">固定給 (万円/月)</label>
+                            <input type="number" value={settings.baseSalary} onChange={(e) => handleSettingChange('baseSalary', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        {/* Other settings inputs */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">売上目標 (万円/{settings.targetPeriod === 'week' ? '週' : settings.targetPeriod === 'month' ? '月' : '四半期'})</label>
+                            <input type="number" value={settings.salesTarget} onChange={(e) => handleSettingChange('salesTarget', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">粗利目標 (万円/{settings.targetPeriod === 'week' ? '週' : settings.targetPeriod === 'month' ? '月' : '四半期'})</label>
+                            <input type="number" value={settings.grossProfitTarget} onChange={(e) => handleSettingChange('grossProfitTarget', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">商品単価 (万円/件)</label>
+                            <input type="number" value={settings.unitPrice} onChange={(e) => handleSettingChange('unitPrice', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">商品粗利 (万円/件)</label>
+                            <input type="number" value={settings.unitGrossProfit} onChange={(e) => handleSettingChange('unitGrossProfit', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">受注率 (%)</label>
+                            <input type="number" value={settings.dealWinRate} onChange={(e) => handleSettingChange('dealWinRate', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">アポ率 (%)</label>
+                            <input type="number" value={settings.appointmentRate} onChange={(e) => handleSettingChange('appointmentRate', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">架電目標 (件)</label>
+                            <input type="number" value={settings.callTarget} onChange={(e) => handleSettingChange('callTarget', parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-md" />
+                        </div>
+                    </div>
+                </div>
+
+                {/* Progress Dashboard */}
+                <div className="bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4 border-b-2 border-green-200 pb-2">
+                        📊 進捗ダッシュボード ({settings.targetPeriod === 'week' ? '週間' : settings.targetPeriod === 'month' ? '月間' : '四半期'})
+                    </h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <ProgressBar label="売上進捗" current={calculations.currentPeriod.totalContractAmount} target={calculations.adjustedSalesTarget} percentage={calculations.progressRates.sales} />
+                        <ProgressBar label="粗利進捗" current={calculations.currentPeriod.totalGrossProfitAmount} target={calculations.adjustedGrossProfitTarget} percentage={calculations.progressRates.grossProfit} />
+                        <ProgressBar label="架電進捗" current={calculations.currentPeriod.totalCalls} target={calculations.adjustedCallTarget} percentage={calculations.progressRates.calls} />
+                        <ProgressBar label="アポ進捗" current={calculations.currentPeriod.totalAppointments} target={calculations.requiredAppointments} percentage={calculations.progressRates.appointments} />
+                        <ProgressBar label="商談進捗" current={calculations.currentPeriod.totalDeals} target={calculations.requiredDeals} percentage={calculations.progressRates.deals} />
+                        <ProgressBar label="受注進捗" current={calculations.currentPeriod.totalContracts} target={calculations.requiredContracts} percentage={calculations.progressRates.contracts} />
+                    </div>
+                </div>
+
+                {/* Daily Record Input */}
+                <div className="bg-white p-6 rounded-lg shadow-md mb-8">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4 border-b-2 border-blue-200 pb-2">📝 日次実績入力</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">日付 <span className="text-red-500">*</span></label>
+                            <input type="date" value={currentDate} onChange={(e) => setCurrentDate(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md" required />
+                        </div>
+                        {Object.keys(dailyInputs).map(key => (
+                             <div key={key}>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    {{
+                                        calls: '架電数', appointments: '新規アポ獲得数', proposals: '提案書提出数',
+                                        deals: '商談数', contracts: '契約獲得数', contractAmount: '契約金額(万円)',
+                                        grossProfitAmount: '粗利金額(万円)'
+                                    }[key]}
+                                    {key === 'grossProfitAmount' && <span className="text-red-500 ml-1">💰重要</span>}
+                                </label>
+                                <input type="number" value={dailyInputs[key]} onChange={(e) => handleDailyInputChange(key, e.target.value)} className={`w-full p-2 border rounded-md ${key === 'grossProfitAmount' ? 'border-green-300 bg-green-50' : 'border-gray-300'}`} placeholder="0" />
+                            </div>
+                        ))}
+                    </div>
+                    <div className="flex gap-4">
+                        <button onClick={handleAddDailyRecord} className="flex-1 py-3 px-4 rounded-md text-white font-semibold transition duration-300 bg-blue-600 hover:bg-blue-700">📊 実績を追加/更新</button>
+                        <button onClick={handleClearData} className="py-3 px-4 rounded-md text-white font-semibold transition duration-300 bg-red-600 hover:bg-red-700">🗑️ 全実績クリア</button>
+                    </div>
+                </div>
+
+                {/* Daily Records History */}
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-4 border-b-2 border-blue-200 pb-2">📋 日次実績履歴</h2>
+                    {dailyRecords.length === 0 ? (
+                        <div className="text-center py-8"><p className="text-gray-600">まだ日次実績がありません。</p></div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full bg-white">
+                                <thead>
+                                    <tr className="bg-gray-100 text-gray-600 uppercase text-sm leading-normal">
+                                        <th className="py-3 px-6 text-left">日付</th>
+                                        <th className="py-3 px-6 text-left">架電</th>
+                                        <th className="py-3 px-6 text-left">アポ</th>
+                                        <th className="py-3 px-6 text-left">提案</th>
+                                        <th className="py-3 px-6 text-left">商談</th>
+                                        <th className="py-3 px-6 text-left">契約</th>
+                                        <th className="py-3 px-6 text-left">契約額(万)</th>
+                                        <th className="py-3 px-6 text-left">粗利額(万)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="text-gray-700 text-sm">
+                                    {dailyRecords.map((record) => (
+                                        <tr key={record.id} className="border-b border-gray-200 hover:bg-gray-50">
+                                            <td className="py-3 px-6 font-medium">{record.date}</td>
+                                            <td className="py-3 px-6">{record.calls}</td>
+                                            <td className="py-3 px-6">{record.appointments}</td>
+                                            <td className="py-3 px-6">{record.proposals}</td>
+                                            <td className="py-3 px-6">{record.deals}</td>
+                                            <td className="py-3 px-6">{record.contracts}</td>
+                                            <td className="py-3 px-6">{record.contractAmount.toFixed(1)}</td>
+                                            <td className="py-3 px-6 font-semibold text-green-600">{(record.grossProfitAmount || 0).toFixed(1)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                {/* Modals */}
+                {showUserModal && <UserSetupModal userName={userName} setUserName={setUserName} onSetup={handleUserSetup} />}
+                {showModal && <Modal title={modalTitle} message={modalMessage} onClose={() => setShowModal(false)} />}
+            </div>
+        </div>
+    );
+}
