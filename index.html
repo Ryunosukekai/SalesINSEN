@@ -220,6 +220,802 @@ const UserSetupModal = ({ userName, setUserName, onSetup }) => {
     );
 };
 
+// --- クライアント提案自動化コンポーネント ---
+const ClientProposalAutomation = ({ db, userId, appId, saveProposalData, proposalHistory, setProposalHistory }) => {
+    const [activeStep, setActiveStep] = useState('input'); // input, analysis, proposal
+    const [hearingData, setHearingData] = useState({
+        companyName: '',
+        industry: '',
+        companySize: '',
+        contactName: '',
+        contactRole: '',
+        decisionMaker: '',
+        currentSituation: '',
+        challenges: [],
+        challengeDetail: '',
+        budget: '',
+        budgetFlexibility: '',
+        timeline: '',
+        urgency: '',
+        competitors: '',
+        previousAttempts: '',
+        desiredOutcome: '',
+        kpiMetrics: '',
+    });
+    const [analysisResult, setAnalysisResult] = useState(null);
+    const [selectedProposal, setSelectedProposal] = useState(null);
+
+    const challengeOptions = [
+        '人材採用の難航', '離職率の高さ', '組織体制の見直し', '売上拡大',
+        'コスト削減', '業務効率化', '新規事業展開', 'DX推進',
+        'ブランディング強化', '顧客満足度向上', 'マーケティング強化', '人材育成・研修'
+    ];
+
+    const industryOptions = [
+        'IT・通信', '製造業', '小売・流通', '金融・保険', '不動産',
+        '医療・ヘルスケア', '教育', '飲食・サービス', '建設・土木',
+        'コンサルティング', '人材・HR', '広告・メディア', 'その他'
+    ];
+
+    const handleInputChange = (key, value) => {
+        setHearingData(prev => ({ ...prev, [key]: value }));
+    };
+
+    const handleChallengeToggle = (challenge) => {
+        setHearingData(prev => ({
+            ...prev,
+            challenges: prev.challenges.includes(challenge)
+                ? prev.challenges.filter(c => c !== challenge)
+                : [...prev.challenges, challenge]
+        }));
+    };
+
+    // === Galante フレームワーク分析エンジン ===
+    const analyzeClient = () => {
+        const d = hearingData;
+
+        // --- BANT スコアリング ---
+        const bantScore = {
+            budget: d.budget === 'high' ? 5 : d.budget === 'medium' ? 3 : d.budget === 'low' ? 1 : 0,
+            authority: d.contactRole === 'executive' ? 5 : d.contactRole === 'manager' ? 3 : d.contactRole === 'staff' ? 1 : 2,
+            need: Math.min(d.challenges.length * 1.5, 5),
+            timeline: d.timeline === 'immediate' ? 5 : d.timeline === 'quarter' ? 4 : d.timeline === 'half' ? 3 : d.timeline === 'year' ? 2 : 1,
+        };
+        const bantTotal = Object.values(bantScore).reduce((sum, v) => sum + v, 0);
+        const bantMax = 20;
+        const bantPercentage = (bantTotal / bantMax) * 100;
+
+        // --- 緊急度判定 ---
+        const urgencyLevel = d.urgency === 'critical' ? 'S' : d.urgency === 'high' ? 'A' : d.urgency === 'medium' ? 'B' : 'C';
+
+        // --- 案件ランク ---
+        let dealRank;
+        if (bantPercentage >= 80 && (urgencyLevel === 'S' || urgencyLevel === 'A')) {
+            dealRank = { rank: 'S', label: '最優先案件', color: 'red' };
+        } else if (bantPercentage >= 60) {
+            dealRank = { rank: 'A', label: '有力案件', color: 'orange' };
+        } else if (bantPercentage >= 40) {
+            dealRank = { rank: 'B', label: '育成案件', color: 'yellow' };
+        } else {
+            dealRank = { rank: 'C', label: '情報収集段階', color: 'gray' };
+        }
+
+        // --- ソリューションマッピング ---
+        const solutionMap = {
+            '人材採用の難航': {
+                solutions: ['採用戦略コンサルティング', '求人媒体最適化', 'ダイレクトリクルーティング導入', '採用ブランディング'],
+                approach: 'まず現在の採用チャネルと応募者数の推移をヒアリングし、ボトルネックを特定。競合他社の採用状況との比較データを提示しながら具体的改善策を提案。',
+                kpi: '応募数、面接設定率、内定承諾率'
+            },
+            '離職率の高さ': {
+                solutions: ['組織診断・エンゲージメント調査', '人事制度設計', '1on1導入支援', '退職者分析'],
+                approach: '退職理由の傾向分析から入り、業界平均との比較で危機感を共有。短期施策（面談制度等）と中長期施策（制度改革等）の2段階で提案。',
+                kpi: '離職率、エンゲージメントスコア、平均勤続年数'
+            },
+            '組織体制の見直し': {
+                solutions: ['組織設計コンサルティング', '人材配置最適化', '評価制度改定', 'マネジメント研修'],
+                approach: '現組織図と業務フローのAs-Is分析から始め、成長戦略と連動したTo-Be組織像を提示。段階的な移行ロードマップで実現可能性を示す。',
+                kpi: '生産性指標、部門間連携スコア、管理スパン'
+            },
+            '売上拡大': {
+                solutions: ['営業プロセス改革', '営業研修・トレーニング', 'CRM/SFA導入支援', 'インセンティブ制度設計'],
+                approach: '現在の営業KPI（架電数→アポ率→商談化率→成約率）を逆算分析し、最もレバレッジが効くポイントを特定。ROI試算を添えて投資対効果を可視化。',
+                kpi: '売上成長率、営業一人当たり生産性、LTV'
+            },
+            'コスト削減': {
+                solutions: ['業務プロセス分析', 'アウトソーシング戦略', 'ツール導入によるコスト最適化', '調達改革'],
+                approach: 'コスト構造の可視化から着手し、業界ベンチマークとの比較で削減余地を数値化。品質を維持しながらのコスト最適化アプローチを強調。',
+                kpi: '削減率、ROI、業務工数削減時間'
+            },
+            '業務効率化': {
+                solutions: ['BPR（業務プロセス改革）', 'RPA導入支援', 'ワークフロー最適化', 'ナレッジマネジメント'],
+                approach: '業務フローの棚卸しと工数分析でムダを特定。投資回収期間を明示した段階的導入プランで、リスクを最小化する提案。',
+                kpi: '業務時間削減率、処理件数、エラー率'
+            },
+            '新規事業展開': {
+                solutions: ['市場調査・分析', '事業計画策定支援', 'PMO支援', '人材確保・チーム組成'],
+                approach: '市場機会の定量分析から入り、自社リソースとのフィット分析を実施。必要投資と期待リターンのシナリオ分析で意思決定を支援。',
+                kpi: '市場シェア、売上計画達成率、投資回収期間'
+            },
+            'DX推進': {
+                solutions: ['DX戦略策定', 'システム導入支援', 'デジタル人材育成', 'データ活用基盤構築'],
+                approach: 'DX成熟度診断で現在地を把握し、業界先進事例との比較で目指すべき姿を共有。技術面だけでなく組織・文化面の変革も含めた包括的提案。',
+                kpi: 'デジタル化率、データ活用率、業務自動化率'
+            },
+            'ブランディング強化': {
+                solutions: ['ブランド戦略策定', '企業HP/採用サイトリニューアル', 'SNS運用支援', 'PR戦略'],
+                approach: '現在のブランド認知度調査と競合比較から着手。ターゲット顧客のペルソナ分析に基づき、効果的なブランドメッセージとチャネル戦略を設計。',
+                kpi: '認知度、ブランド想起率、エンゲージメント率'
+            },
+            '顧客満足度向上': {
+                solutions: ['CS調査・分析', 'カスタマージャーニー設計', 'CX改善コンサルティング', 'ロイヤルティプログラム設計'],
+                approach: 'NPS/CSATの現状把握と不満足要因の特定から開始。カスタマージャーニーマップで課題を可視化し、優先順位をつけた改善ロードマップを提案。',
+                kpi: 'NPS、CSAT、リピート率、LTV'
+            },
+            'マーケティング強化': {
+                solutions: ['マーケティング戦略策定', 'MA導入支援', 'コンテンツマーケティング', 'リード獲得施策'],
+                approach: '現在のマーケティングファネル分析から着手し、各段階のコンバージョン率を可視化。投資対効果の高い施策を優先順位付けして提案。',
+                kpi: 'リード獲得数、CVR、CPA、マーケティングROI'
+            },
+            '人材育成・研修': {
+                solutions: ['研修体系設計', 'スキルマップ作成', 'メンタリング制度導入', 'eラーニング導入'],
+                approach: 'スキルギャップ分析から入り、経営戦略に必要な人材要件を明確化。OJTとOff-JTの最適な組み合わせで、即効性と中長期成長の両立を提案。',
+                kpi: '研修満足度、スキル習得率、昇進率、生産性変化'
+            }
+        };
+
+        // 該当ソリューションの集約
+        const matchedSolutions = d.challenges.map(c => solutionMap[c] || null).filter(Boolean);
+        const allSolutions = matchedSolutions.flatMap(s => s.solutions);
+        const allApproaches = matchedSolutions.map(s => s.approach);
+        const allKpis = matchedSolutions.map(s => s.kpi);
+
+        // --- 商談戦略の生成 ---
+        const generateMeetingStrategy = () => {
+            let strategy = {
+                type: '',
+                structure: [],
+                talkingPoints: [],
+                objectionHandling: [],
+                closingTechnique: ''
+            };
+
+            if (dealRank.rank === 'S' || dealRank.rank === 'A') {
+                strategy.type = 'クロージング重視型商談';
+                strategy.structure = [
+                    '① アイスブレイク（5分）：前回の振り返りと変化の確認',
+                    '② 課題の深掘り（10分）：定量的なインパクトの確認',
+                    '③ ソリューション提示（15分）：ROI試算と成功事例の紹介',
+                    '④ 提案内容のすり合わせ（10分）：カスタマイズポイントの確認',
+                    '⑤ 次のステップの合意（10分）：意思決定プロセスとスケジュールの確定'
+                ];
+                strategy.closingTechnique = '選択肢クロージング：「AプランとBプラン、どちらがより御社の状況にフィットしますか？」で具体的な意思決定を促す';
+            } else if (dealRank.rank === 'B') {
+                strategy.type = '課題深掘り・信頼構築型商談';
+                strategy.structure = [
+                    '① アイスブレイク（5分）：業界トレンドの共有',
+                    '② 現状ヒアリング深掘り（15分）：定量データの確認と背景理解',
+                    '③ 課題の構造化（10分）：課題の因果関係を整理して見える化',
+                    '④ 方向性の提示（10分）：解決アプローチの大枠を共有',
+                    '⑤ 宿題と次回の約束（10分）：具体的な提案に向けた情報収集'
+                ];
+                strategy.closingTechnique = '段階的コミットメント：「まず小さく始めてみませんか？パイロットプロジェクトとして○○から着手することをご提案します」';
+            } else {
+                strategy.type = '関係構築・情報提供型商談';
+                strategy.structure = [
+                    '① アイスブレイク（10分）：相手の関心事と業界話題',
+                    '② 情報提供（15分）：業界レポートや他社事例の共有',
+                    '③ 軽いヒアリング（10分）：現状と関心のある領域の確認',
+                    '④ 次の接点の設計（5分）：セミナー案内や情報提供の約束'
+                ];
+                strategy.closingTechnique = '情報提供クロージング：「次回、御社の業界に特化したレポートをお持ちします。○日はいかがですか？」';
+            }
+
+            // トーキングポイント
+            if (d.challenges.length > 0) {
+                strategy.talkingPoints.push(`「${d.challenges[0]}」について、同業他社様でも同様の課題を抱えているケースが多く、弊社では○件の支援実績があります。`);
+            }
+            if (d.budget === 'high' || d.budget === 'medium') {
+                strategy.talkingPoints.push('投資対効果を数値で示す：「同規模の企業様での導入事例では、○ヶ月で投資回収されています」');
+            }
+            if (d.competitors) {
+                strategy.talkingPoints.push(`競合との差別化ポイント：${d.competitors}との比較で弊社の強みを3つに絞って訴求`);
+            }
+            if (d.timeline === 'immediate') {
+                strategy.talkingPoints.push('スピード感のある対応をアピール：「最短○日で初期診断レポートをお出しできます」');
+            }
+            strategy.talkingPoints.push('相手の言葉を使って課題を再定義し、「わかってもらえている」感を醸成する');
+
+            // 想定反論と対応
+            strategy.objectionHandling = [
+                { objection: '価格が高い', response: '「ご予算感は理解しています。まずROIをご確認いただき、投資として判断いただけるよう試算をお見せします」' },
+                { objection: '今は忙しい/タイミングではない', response: '「おっしゃる通り、お忙しい時期だと思います。だからこそ、今始めることで○ヶ月後の繁忙期に備えることができます」' },
+                { objection: '社内で検討が必要', response: '「もちろんです。ご担当者様が社内説明されやすいよう、ROI資料と事例集をご用意します。次回のお打ち合わせで決裁者様にもご同席いただけますか？」' },
+                { objection: '他社も検討中', response: '「比較検討は大切です。弊社の強みを3点に絞ってご説明します。比較表もお作りしますので、ぜひご判断の材料にしてください」' }
+            ];
+
+            return strategy;
+        };
+
+        // --- 提案書構成の生成 ---
+        const generateProposalStructure = () => {
+            return {
+                title: `${d.companyName}様 向け ${d.challenges.length > 0 ? d.challenges[0] : '課題解決'}ご提案書`,
+                sections: [
+                    {
+                        title: '1. エグゼクティブサマリー',
+                        content: `${d.companyName}様の${d.challenges.join('、')}という課題に対し、${allSolutions.slice(0, 3).join('・')}を中心としたソリューションをご提案します。`
+                    },
+                    {
+                        title: '2. 貴社の現状と課題認識',
+                        content: d.currentSituation || '（ヒアリング内容をもとに記載）',
+                        subItems: d.challenges.map(c => `・${c}`)
+                    },
+                    {
+                        title: '3. 課題の構造分析',
+                        content: '課題間の因果関係と優先度を整理し、最もインパクトの大きい領域を特定。'
+                    },
+                    {
+                        title: '4. ソリューションのご提案',
+                        content: allSolutions.length > 0
+                            ? allSolutions.map((s, i) => `${i + 1}. ${s}`).join('\n')
+                            : '（課題に基づき最適なソリューションを設計）'
+                    },
+                    {
+                        title: '5. 期待される効果・KPI',
+                        content: allKpis.length > 0 ? allKpis.join(' / ') : '（定量的な効果予測を記載）'
+                    },
+                    {
+                        title: '6. 実施スケジュール',
+                        content: d.timeline === 'immediate' ? '即日〜1ヶ月：初期診断・クイックウィン\n2〜3ヶ月：本格導入・改善サイクル' :
+                                 d.timeline === 'quarter' ? '1ヶ月目：現状分析・計画策定\n2ヶ月目：施策実行\n3ヶ月目：効果測定・改善' :
+                                 '（タイムラインに合わせた段階的スケジュールを設計）'
+                    },
+                    {
+                        title: '7. 概算費用',
+                        content: d.budget === 'high' ? 'プレミアムプラン：包括的支援パッケージ' :
+                                 d.budget === 'medium' ? 'スタンダードプラン：重点課題への集中支援' :
+                                 d.budget === 'low' ? 'ライトプラン：最小限の投資で最大効果を狙う' :
+                                 '（ご予算に合わせた複数プランをご用意）'
+                    },
+                    {
+                        title: '8. 弊社の実績・強み',
+                        content: '導入実績と成功事例を記載'
+                    }
+                ]
+            };
+        };
+
+        // --- ネクストアクション生成 ---
+        const generateNextActions = () => {
+            const actions = [];
+            if (dealRank.rank === 'S') {
+                actions.push({ priority: '高', action: '3日以内に提案書を送付', deadline: '3日以内' });
+                actions.push({ priority: '高', action: '決裁者同席の商談を設定', deadline: '1週間以内' });
+                actions.push({ priority: '中', action: 'ROI試算資料の作成', deadline: '提案書送付と同時' });
+            } else if (dealRank.rank === 'A') {
+                actions.push({ priority: '高', action: '1週間以内に提案書ドラフトを送付', deadline: '1週間以内' });
+                actions.push({ priority: '高', action: '次回商談の日程調整', deadline: '3日以内' });
+                actions.push({ priority: '中', action: '類似事例の収集', deadline: '1週間以内' });
+            } else if (dealRank.rank === 'B') {
+                actions.push({ priority: '中', action: '課題整理レポートの送付', deadline: '1週間以内' });
+                actions.push({ priority: '中', action: 'セミナー・ウェビナーへの招待', deadline: '次回開催時' });
+                actions.push({ priority: '低', action: '定期的な情報提供（月1回）', deadline: '継続' });
+            } else {
+                actions.push({ priority: '低', action: '業界レポートの送付', deadline: '2週間以内' });
+                actions.push({ priority: '低', action: 'メルマガ登録の案内', deadline: '次回接触時' });
+            }
+            if (d.contactRole !== 'executive' && d.decisionMaker) {
+                actions.push({ priority: '高', action: `決裁者（${d.decisionMaker}）への接触機会を創出`, deadline: '次回商談まで' });
+            }
+            return actions;
+        };
+
+        const result = {
+            bantScore,
+            bantPercentage,
+            urgencyLevel,
+            dealRank,
+            matchedSolutions: allSolutions,
+            approaches: allApproaches,
+            kpis: allKpis,
+            meetingStrategy: generateMeetingStrategy(),
+            proposalStructure: generateProposalStructure(),
+            nextActions: generateNextActions(),
+            generatedAt: new Date().toISOString()
+        };
+
+        setAnalysisResult(result);
+        setActiveStep('analysis');
+    };
+
+    const saveProposal = () => {
+        if (!analysisResult) return;
+        const proposal = {
+            id: Date.now().toString(),
+            hearingData: { ...hearingData },
+            analysisResult: { ...analysisResult },
+            savedAt: new Date().toISOString()
+        };
+        const updated = [proposal, ...proposalHistory];
+        setProposalHistory(updated);
+        if (saveProposalData) {
+            saveProposalData({ clientProposals: updated });
+        }
+    };
+
+    const loadProposal = (proposal) => {
+        setHearingData(proposal.hearingData);
+        setAnalysisResult(proposal.analysisResult);
+        setSelectedProposal(proposal);
+        setActiveStep('analysis');
+    };
+
+    const deleteProposal = (id) => {
+        const updated = proposalHistory.filter(p => p.id !== id);
+        setProposalHistory(updated);
+        if (saveProposalData) {
+            saveProposalData({ clientProposals: updated });
+        }
+    };
+
+    // --- レンダリング ---
+
+    const renderStepNav = () => (
+        <div className="flex gap-2 mb-6 border-b border-gray-200 pb-4">
+            {[
+                { key: 'input', label: '📝 ヒアリング入力', desc: 'クライアント情報入力' },
+                { key: 'analysis', label: '📊 分析・提案', desc: '自動分析結果' },
+                { key: 'history', label: '📁 提案履歴', desc: '過去の提案一覧' }
+            ].map(step => (
+                <button
+                    key={step.key}
+                    onClick={() => setActiveStep(step.key)}
+                    className={`flex-1 p-3 rounded-lg text-left transition-all ${
+                        activeStep === step.key
+                            ? 'bg-indigo-600 text-white shadow-md'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                >
+                    <div className="font-bold text-sm">{step.label}</div>
+                    <div className={`text-xs mt-1 ${activeStep === step.key ? 'text-indigo-100' : 'text-gray-500'}`}>{step.desc}</div>
+                </button>
+            ))}
+        </div>
+    );
+
+    const renderHearingForm = () => (
+        <div className="space-y-6">
+            {/* 基本情報 */}
+            <div className="bg-blue-50 p-5 rounded-lg border border-blue-200">
+                <h3 className="font-bold text-lg text-blue-800 mb-4">企業基本情報</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">企業名 <span className="text-red-500">*</span></label>
+                        <input type="text" value={hearingData.companyName} onChange={(e) => handleInputChange('companyName', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" placeholder="例: 株式会社○○" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">業界</label>
+                        <select value={hearingData.industry} onChange={(e) => handleInputChange('industry', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">選択してください</option>
+                            {industryOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">企業規模</label>
+                        <select value={hearingData.companySize} onChange={(e) => handleInputChange('companySize', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">選択してください</option>
+                            <option value="startup">スタートアップ（〜30名）</option>
+                            <option value="small">中小企業（31〜100名）</option>
+                            <option value="medium">中堅企業（101〜500名）</option>
+                            <option value="large">大企業（501〜1000名）</option>
+                            <option value="enterprise">大手企業（1001名〜）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            {/* 担当者情報 */}
+            <div className="bg-green-50 p-5 rounded-lg border border-green-200">
+                <h3 className="font-bold text-lg text-green-800 mb-4">担当者・意思決定者情報</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">担当者名</label>
+                        <input type="text" value={hearingData.contactName} onChange={(e) => handleInputChange('contactName', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" placeholder="例: 山田太郎" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">担当者の役職レベル</label>
+                        <select value={hearingData.contactRole} onChange={(e) => handleInputChange('contactRole', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">選択してください</option>
+                            <option value="executive">経営層（社長・役員・部長）</option>
+                            <option value="manager">管理職（課長・マネージャー）</option>
+                            <option value="staff">担当者・スタッフ</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">最終決裁者</label>
+                        <input type="text" value={hearingData.decisionMaker} onChange={(e) => handleInputChange('decisionMaker', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" placeholder="例: 代表取締役 佐藤" />
+                    </div>
+                </div>
+            </div>
+
+            {/* 課題・ニーズ */}
+            <div className="bg-orange-50 p-5 rounded-lg border border-orange-200">
+                <h3 className="font-bold text-lg text-orange-800 mb-4">課題・ニーズ <span className="text-red-500">*</span></h3>
+                <p className="text-sm text-gray-600 mb-3">該当する課題をすべて選択してください（複数選択可）</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-4">
+                    {challengeOptions.map(challenge => (
+                        <button
+                            key={challenge}
+                            onClick={() => handleChallengeToggle(challenge)}
+                            className={`p-2 rounded-md text-sm font-medium transition-all border ${
+                                hearingData.challenges.includes(challenge)
+                                    ? 'bg-orange-500 text-white border-orange-600 shadow-sm'
+                                    : 'bg-white text-gray-700 border-gray-300 hover:bg-orange-50'
+                            }`}
+                        >
+                            {challenge}
+                        </button>
+                    ))}
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">課題の詳細（自由記述）</label>
+                    <textarea value={hearingData.challengeDetail} onChange={(e) => handleInputChange('challengeDetail', e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-md" rows="3" placeholder="クライアントが話した具体的な課題やエピソードを記録..." />
+                </div>
+            </div>
+
+            {/* 現状と背景 */}
+            <div className="bg-purple-50 p-5 rounded-lg border border-purple-200">
+                <h3 className="font-bold text-lg text-purple-800 mb-4">現状と背景</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">現在の状況</label>
+                        <textarea value={hearingData.currentSituation} onChange={(e) => handleInputChange('currentSituation', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" rows="3" placeholder="現在どのような状態か、何がきっかけで相談に至ったか..." />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">過去の取り組み・他社利用歴</label>
+                        <textarea value={hearingData.previousAttempts} onChange={(e) => handleInputChange('previousAttempts', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" rows="2" placeholder="過去に試したこと、他社サービスの利用経験など..." />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">期待する成果・ゴール</label>
+                        <textarea value={hearingData.desiredOutcome} onChange={(e) => handleInputChange('desiredOutcome', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" rows="2" placeholder="どうなったら成功と言えるか..." />
+                    </div>
+                </div>
+            </div>
+
+            {/* BANT情報 */}
+            <div className="bg-red-50 p-5 rounded-lg border border-red-200">
+                <h3 className="font-bold text-lg text-red-800 mb-4">予算・タイムライン・緊急度（BANT）</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">予算感</label>
+                        <select value={hearingData.budget} onChange={(e) => handleInputChange('budget', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">不明</option>
+                            <option value="high">潤沢（100万円以上/月）</option>
+                            <option value="medium">中程度（30〜100万円/月）</option>
+                            <option value="low">限定的（30万円未満/月）</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">予算の柔軟性</label>
+                        <select value={hearingData.budgetFlexibility} onChange={(e) => handleInputChange('budgetFlexibility', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">不明</option>
+                            <option value="flexible">柔軟（効果次第で増額可）</option>
+                            <option value="fixed">固定（上限あり）</option>
+                            <option value="tbd">未定（これから確保）</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">導入希望時期</label>
+                        <select value={hearingData.timeline} onChange={(e) => handleInputChange('timeline', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">不明</option>
+                            <option value="immediate">すぐにでも（1ヶ月以内）</option>
+                            <option value="quarter">四半期以内（3ヶ月以内）</option>
+                            <option value="half">半年以内</option>
+                            <option value="year">1年以内</option>
+                            <option value="undecided">未定</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">緊急度</label>
+                        <select value={hearingData.urgency} onChange={(e) => handleInputChange('urgency', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">不明</option>
+                            <option value="critical">緊急（経営課題レベル）</option>
+                            <option value="high">高い（今期中に解決したい）</option>
+                            <option value="medium">中程度（改善したい）</option>
+                            <option value="low">低い（情報収集段階）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            {/* 競合情報 */}
+            <div className="bg-gray-50 p-5 rounded-lg border border-gray-200">
+                <h3 className="font-bold text-lg text-gray-800 mb-4">競合・その他情報</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">検討中の競合他社</label>
+                        <input type="text" value={hearingData.competitors} onChange={(e) => handleInputChange('competitors', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" placeholder="例: A社、B社" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">成功指標（KPI）</label>
+                        <input type="text" value={hearingData.kpiMetrics} onChange={(e) => handleInputChange('kpiMetrics', e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-md" placeholder="例: 離職率10%改善、採用数2倍" />
+                    </div>
+                </div>
+            </div>
+
+            {/* 分析ボタン */}
+            <button
+                onClick={analyzeClient}
+                disabled={!hearingData.companyName || hearingData.challenges.length === 0}
+                className={`w-full py-4 px-6 rounded-lg text-white font-bold text-lg transition-all ${
+                    hearingData.companyName && hearingData.challenges.length > 0
+                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl'
+                        : 'bg-gray-400 cursor-not-allowed'
+                }`}
+            >
+                🔍 Galanteフレームワークで自動分析・提案生成
+            </button>
+            {(!hearingData.companyName || hearingData.challenges.length === 0) && (
+                <p className="text-sm text-red-500 text-center">※ 企業名と課題（1つ以上）は必須入力です</p>
+            )}
+        </div>
+    );
+
+    const renderAnalysis = () => {
+        if (!analysisResult) {
+            return <div className="text-center py-12 text-gray-500">まずヒアリング情報を入力して分析を実行してください。</div>;
+        }
+
+        const r = analysisResult;
+        const rankColors = { S: 'bg-red-100 text-red-800 border-red-300', A: 'bg-orange-100 text-orange-800 border-orange-300', B: 'bg-yellow-100 text-yellow-800 border-yellow-300', C: 'bg-gray-100 text-gray-800 border-gray-300' };
+
+        return (
+            <div className="space-y-6">
+                {/* 案件サマリー */}
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-6 rounded-lg border border-indigo-200">
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 className="text-2xl font-bold text-gray-800">{hearingData.companyName}</h3>
+                            <p className="text-sm text-gray-600 mt-1">{hearingData.industry} | {hearingData.contactName} ({
+                                hearingData.contactRole === 'executive' ? '経営層' : hearingData.contactRole === 'manager' ? '管理職' : '担当者'
+                            })</p>
+                        </div>
+                        <div className={`px-4 py-2 rounded-lg border-2 font-bold text-lg ${rankColors[r.dealRank.rank]}`}>
+                            {r.dealRank.rank}ランク: {r.dealRank.label}
+                        </div>
+                    </div>
+
+                    {/* BANTスコア */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                        {[
+                            { label: 'Budget（予算）', score: r.bantScore.budget, max: 5 },
+                            { label: 'Authority（決裁権）', score: r.bantScore.authority, max: 5 },
+                            { label: 'Need（必要性）', score: r.bantScore.need, max: 5 },
+                            { label: 'Timeline（時期）', score: r.bantScore.timeline, max: 5 }
+                        ].map(item => (
+                            <div key={item.label} className="bg-white p-3 rounded-lg border">
+                                <div className="text-xs text-gray-600 mb-1">{item.label}</div>
+                                <div className="flex items-center gap-2">
+                                    <div className="text-xl font-bold text-indigo-600">{item.score.toFixed(1)}</div>
+                                    <div className="text-xs text-gray-400">/ {item.max}</div>
+                                </div>
+                                <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
+                                    <div className="bg-indigo-500 h-1.5 rounded-full" style={{ width: `${(item.score / item.max) * 100}%` }}></div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border flex items-center justify-between">
+                        <span className="font-medium text-gray-700">BANT総合スコア</span>
+                        <div className="flex items-center gap-3">
+                            <div className="w-48 bg-gray-200 rounded-full h-3">
+                                <div className={`h-3 rounded-full ${r.bantPercentage >= 80 ? 'bg-green-500' : r.bantPercentage >= 60 ? 'bg-yellow-500' : r.bantPercentage >= 40 ? 'bg-orange-500' : 'bg-red-500'}`}
+                                    style={{ width: `${r.bantPercentage}%` }}></div>
+                            </div>
+                            <span className="font-bold text-lg text-indigo-700">{r.bantPercentage.toFixed(0)}%</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 推奨ソリューション */}
+                <div className="bg-white p-6 rounded-lg shadow-md border">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-indigo-300 pb-2">💡 推奨ソリューション</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {r.matchedSolutions.map((sol, i) => (
+                            <div key={i} className="bg-indigo-50 p-3 rounded-lg border border-indigo-200 flex items-start gap-2">
+                                <span className="bg-indigo-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">{i + 1}</span>
+                                <span className="text-sm font-medium text-gray-800">{sol}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* アプローチ方法 */}
+                {r.approaches.length > 0 && (
+                    <div className="bg-white p-6 rounded-lg shadow-md border">
+                        <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-green-300 pb-2">🎯 提案アプローチ</h3>
+                        <div className="space-y-3">
+                            {r.approaches.map((approach, i) => (
+                                <div key={i} className="bg-green-50 p-4 rounded-lg border border-green-200">
+                                    <p className="text-sm text-gray-800">{approach}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* 商談戦略 */}
+                <div className="bg-white p-6 rounded-lg shadow-md border">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-orange-300 pb-2">🤝 商談戦略: {r.meetingStrategy.type}</h3>
+                    <div className="space-y-4">
+                        <div>
+                            <h4 className="font-bold text-gray-700 mb-2">商談の流れ</h4>
+                            <div className="space-y-2">
+                                {r.meetingStrategy.structure.map((step, i) => (
+                                    <div key={i} className="bg-orange-50 p-3 rounded-lg border border-orange-200 text-sm">{step}</div>
+                                ))}
+                            </div>
+                        </div>
+                        {r.meetingStrategy.talkingPoints.length > 0 && (
+                            <div>
+                                <h4 className="font-bold text-gray-700 mb-2">トークスクリプト・ポイント</h4>
+                                <div className="space-y-2">
+                                    {r.meetingStrategy.talkingPoints.map((point, i) => (
+                                        <div key={i} className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-sm flex items-start gap-2">
+                                            <span className="text-blue-500 flex-shrink-0">💬</span>
+                                            <span>{point}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        <div>
+                            <h4 className="font-bold text-gray-700 mb-2">クロージング手法</h4>
+                            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-300 text-sm font-medium">
+                                {r.meetingStrategy.closingTechnique}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 想定反論対策 */}
+                <div className="bg-white p-6 rounded-lg shadow-md border">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-red-300 pb-2">🛡️ 想定反論と対応策</h3>
+                    <div className="space-y-3">
+                        {r.meetingStrategy.objectionHandling.map((item, i) => (
+                            <div key={i} className="border rounded-lg overflow-hidden">
+                                <div className="bg-red-50 p-3 border-b border-red-200">
+                                    <span className="text-sm font-bold text-red-700">反論: 「{item.objection}」</span>
+                                </div>
+                                <div className="bg-green-50 p-3">
+                                    <span className="text-sm text-green-800">対応: {item.response}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* 提案書構成 */}
+                <div className="bg-white p-6 rounded-lg shadow-md border">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-purple-300 pb-2">📄 提案書構成案</h3>
+                    <h4 className="font-bold text-purple-700 mb-3">{r.proposalStructure.title}</h4>
+                    <div className="space-y-3">
+                        {r.proposalStructure.sections.map((section, i) => (
+                            <div key={i} className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                                <div className="font-bold text-purple-800 text-sm mb-1">{section.title}</div>
+                                <div className="text-sm text-gray-700 whitespace-pre-line">{section.content}</div>
+                                {section.subItems && (
+                                    <div className="mt-2 text-sm text-gray-600">{section.subItems.join('\n')}</div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* ネクストアクション */}
+                <div className="bg-white p-6 rounded-lg shadow-md border">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4 border-b-2 border-teal-300 pb-2">📋 ネクストアクション</h3>
+                    <div className="space-y-2">
+                        {r.nextActions.map((action, i) => (
+                            <div key={i} className="flex items-center gap-3 p-3 bg-teal-50 rounded-lg border border-teal-200">
+                                <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                    action.priority === '高' ? 'bg-red-100 text-red-700' :
+                                    action.priority === '中' ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-gray-100 text-gray-700'
+                                }`}>{action.priority}</span>
+                                <span className="text-sm font-medium text-gray-800 flex-1">{action.action}</span>
+                                <span className="text-xs text-gray-500 bg-white px-2 py-1 rounded border">{action.deadline}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* 保存ボタン */}
+                <div className="flex gap-4">
+                    <button onClick={saveProposal}
+                        className="flex-1 py-3 px-6 rounded-lg bg-gradient-to-r from-green-500 to-teal-500 text-white font-bold hover:from-green-600 hover:to-teal-600 shadow-md transition-all">
+                        💾 この提案を保存
+                    </button>
+                    <button onClick={() => { setActiveStep('input'); }}
+                        className="py-3 px-6 rounded-lg bg-gray-200 text-gray-700 font-bold hover:bg-gray-300 transition-all">
+                        ← ヒアリングに戻る
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    const renderHistory = () => (
+        <div>
+            {proposalHistory.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">保存された提案はありません。</div>
+            ) : (
+                <div className="space-y-3">
+                    {proposalHistory.map(proposal => (
+                        <div key={proposal.id} className="bg-white p-4 rounded-lg shadow-sm border flex items-center justify-between hover:shadow-md transition-all">
+                            <div className="flex-1">
+                                <div className="flex items-center gap-3">
+                                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                        proposal.analysisResult.dealRank.rank === 'S' ? 'bg-red-100 text-red-700' :
+                                        proposal.analysisResult.dealRank.rank === 'A' ? 'bg-orange-100 text-orange-700' :
+                                        proposal.analysisResult.dealRank.rank === 'B' ? 'bg-yellow-100 text-yellow-700' :
+                                        'bg-gray-100 text-gray-700'
+                                    }`}>{proposal.analysisResult.dealRank.rank}ランク</span>
+                                    <span className="font-bold text-gray-800">{proposal.hearingData.companyName}</span>
+                                    <span className="text-sm text-gray-500">{proposal.hearingData.industry}</span>
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1">
+                                    課題: {proposal.hearingData.challenges.join('、')} | 保存日: {new Date(proposal.savedAt).toLocaleDateString()}
+                                </div>
+                            </div>
+                            <div className="flex gap-2 ml-4">
+                                <button onClick={() => loadProposal(proposal)}
+                                    className="px-3 py-2 text-sm bg-indigo-100 text-indigo-700 rounded-md hover:bg-indigo-200 transition-all font-medium">
+                                    詳細を見る
+                                </button>
+                                <button onClick={() => deleteProposal(proposal.id)}
+                                    className="px-3 py-2 text-sm bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-all font-medium">
+                                    削除
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+
+    return (
+        <div className="bg-white p-6 rounded-lg shadow-md">
+            <h2 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+                🚀 クライアント提案自動化
+            </h2>
+            <p className="text-sm text-gray-600 mb-6">Galanteフレームワークに基づき、ヒアリング情報から最適な提案戦略を自動生成します。</p>
+            {renderStepNav()}
+            {activeStep === 'input' && renderHearingForm()}
+            {activeStep === 'analysis' && renderAnalysis()}
+            {activeStep === 'history' && renderHistory()}
+        </div>
+    );
+};
+
 // カスタムモーダルコンポーネント
 const Modal = ({ title, message, onClose }) => {
     return (
@@ -287,6 +1083,12 @@ export default function App() {
         calls: '', appointments: '', proposals: '', deals: '', contracts: '', contractAmount: '', grossProfitAmount: ''
     });
 
+    // Tab navigation state
+    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, proposal
+
+    // Client proposal state
+    const [proposalHistory, setProposalHistory] = useState([]);
+
     // Modal state
     const [showModal, setShowModal] = useState(false);
     const [modalMessage, setModalMessage] = useState('');
@@ -333,6 +1135,7 @@ export default function App() {
                 setUserName(data.userName || '');
                 setSettings(prev => ({ ...prev, ...data.settings }));
                 setDailyRecords(data.dailyRecords || []);
+                setProposalHistory(data.clientProposals || []);
                 if (isInitialLoad) {
                    setShowUserModal(!data.userName);
                 }
@@ -365,6 +1168,17 @@ export default function App() {
         }
     }, [db, userId]);
     
+    // --- Proposal Data Save ---
+    const saveProposalData = useCallback(async (dataToSave) => {
+        if (!db || !userId) return;
+        try {
+            const docRef = doc(db, "artifacts", appId, "users", userId, "sales_dashboard", "data");
+            await setDoc(docRef, dataToSave, { merge: true });
+        } catch (error) {
+            console.error("Failed to save proposal data:", error);
+        }
+    }, [db, userId]);
+
     // --- Calculations ---
     const getFilteredRecords = useCallback((period) => {
         const now = new Date();
@@ -602,7 +1416,44 @@ export default function App() {
                     )}
                 </div>
 
-                {/* Main Content */}
+                {/* Tab Navigation */}
+                <div className="flex gap-2 mb-8">
+                    <button
+                        onClick={() => setActiveTab('dashboard')}
+                        className={`flex-1 py-3 px-6 rounded-lg font-bold text-lg transition-all ${
+                            activeTab === 'dashboard'
+                                ? 'bg-blue-600 text-white shadow-lg'
+                                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                        }`}
+                    >
+                        📊 営業ダッシュボード
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('proposal')}
+                        className={`flex-1 py-3 px-6 rounded-lg font-bold text-lg transition-all ${
+                            activeTab === 'proposal'
+                                ? 'bg-indigo-600 text-white shadow-lg'
+                                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                        }`}
+                    >
+                        🚀 クライアント提案自動化
+                    </button>
+                </div>
+
+                {/* Client Proposal Automation Tab */}
+                {activeTab === 'proposal' && (
+                    <ClientProposalAutomation
+                        db={db}
+                        userId={userId}
+                        appId={appId}
+                        saveProposalData={saveProposalData}
+                        proposalHistory={proposalHistory}
+                        setProposalHistory={setProposalHistory}
+                    />
+                )}
+
+                {/* Dashboard Tab - Main Content */}
+                {activeTab === 'dashboard' && <>
                 <IncentiveDashboard
                     grossProfitAmount={calculations.currentPeriod.totalGrossProfitAmount}
                     baseSalary={settings.baseSalary}
@@ -778,6 +1629,8 @@ export default function App() {
                         </div>
                     )}
                 </div>
+
+                </>}
 
                 {/* Modals */}
                 {showUserModal && <UserSetupModal userName={userName} setUserName={setUserName} onSetup={handleUserSetup} />}
