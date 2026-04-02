@@ -1,0 +1,5 @@
+simple-salesforce>=1.12.0
+anthropic>=0.39.0
+slack-sdk>=3.27.0
+python-dotenv>=1.0.0
+schedule>=1.2.0
